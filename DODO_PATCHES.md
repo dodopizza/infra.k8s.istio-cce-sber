@@ -40,7 +40,7 @@ Push/PR запускают тесты, сборку amd64 runtime, smoke checks 
 GitHub Settings → Secrets and variables → Actions, а не в исходники.
 Существующие теги не перезаписываются; для публикации увеличьте номер ревизии
 в `cce-sber-cni.version`. Ревизия `.2` опубликована из этого форка;
-пошаговые команды обновления находятся в [README](README.md#обновление-образа-cni-для-cce-sber).
+пошаговые команды обновления находятся в [README](README.md#переход-на-новый-upstream-minor-например-130).
 
 В Helm остаётся только потребитель: pinned image digest в
 `charts/istio-control-plane/values-cce-sber.yaml`.
