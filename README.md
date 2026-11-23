@@ -42,9 +42,85 @@
    в его `Chart.yaml`. Если Terraform передаёт `cni.image` явно, обновите
    digest и там. Выпустите чарт и примените изменение через Atlantis.
 
-Push/PR выполняют проверки без публикации. Для обновления самой версии Istio
-нужно также перенести патч на новый upstream tag и обновить базовые образы
-в Dockerfile — [подробнее о патче и сборке](DODO_PATCHES.md).
+Push/PR выполняют проверки без публикации.
+
+## Переход на новый upstream minor, например 1.30
+
+Используйте полный опубликованный тег (`1.30.0`, `1.30.1` и т. д.).
+Ниже `1.30.0` — пример: команды выполнять после выхода нужного релиза.
+Для каждого upstream tag создаётся отдельная ветка; старая остаётся для отката.
+Команды выполняются из чистого checkout форка. Если remote `upstream` ещё
+не добавлен: `git remote add upstream https://github.com/istio/istio.git`.
+
+1. Создайте ветку от официального тега и перенесите наш патч:
+
+   ```sh
+   UPSTREAM_VERSION=1.30.0
+   CNI_BRANCH="cce-sber-$UPSTREAM_VERSION"
+   git fetch origin
+   git fetch upstream "refs/tags/$UPSTREAM_VERSION:refs/tags/$UPSTREAM_VERSION"
+   git switch -c "$CNI_BRANCH" "$UPSTREAM_VERSION"
+
+   # Только изменение CNI и его golden tests, без старого upstream-кода.
+   git show b09a841ecea29c9baebb2cdf38cd3ce6c60ceaa5 --format= -- cni/pkg/iptables |
+     git apply --3way
+
+   # Перенести файлы сборки и документацию нашего форка.
+   git restore --source origin/cce-sber-1.29.10 -- \
+     .dockerignore .github/workflows/build-cce-sber-cni.yml \
+     cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber \
+     cni/deployments/kubernetes/cce-sber-cni.version README.md DODO_PATCHES.md
+   printf '%s\n' "$UPSTREAM_VERSION-cce-sber-hbone.1" > cni/deployments/kubernetes/cce-sber-cni.version
+   git rev-parse "$UPSTREAM_VERSION^{commit}"
+   ```
+
+   При конфликте остановитесь и адаптируйте патч и golden tests к новому коду.
+   Если upstream уже исправил проблему, проверьте воспроизведение без нашего патча.
+
+2. Обновите перенесённые файлы:
+
+   - В workflow замените обе `branches: [cce-sber-1.29.10]` на новую ветку.
+   - В Dockerfile замените runtime на `istio/install-cni:1.30.0-distroless@sha256:…`
+     с digest нового официального образа. Проверьте пути обоих бинарников.
+   - Обновите Go builder и его digest по требованиям нового `go.mod` / `go toolchain`.
+   - Замените `io.dodopizza.istio.upstream-revision` на SHA из `git rev-parse` выше.
+     В README и DODO_PATCHES обновите базовую версию, SHA и имя ветки.
+
+   Получить digest runtime и посмотреть требования Go:
+
+   ```sh
+   docker buildx imagetools inspect "istio/install-cni:$UPSTREAM_VERSION-distroless"
+   rg '^(go|toolchain) ' go.mod
+   ```
+
+3. Отправьте ветку и сначала проверьте сборку без публикации:
+
+   ```sh
+   git add cni/pkg/iptables .dockerignore .github/workflows/build-cce-sber-cni.yml \
+     cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber \
+     cni/deployments/kubernetes/cce-sber-cni.version README.md DODO_PATCHES.md
+   git diff --cached --check
+   git commit -m "build(cni): port CCE-Sber workaround to Istio $UPSTREAM_VERSION"
+   git push -u origin "$CNI_BRANCH"
+   gh run list --repo dodopizza/infra.k8s.istio-fork --branch "$CNI_BRANCH" \
+     --workflow build-cce-sber-cni.yml --limit 1
+   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-fork --exit-status
+   ```
+
+4. После успешных тестов опубликуйте образ:
+
+   ```sh
+   gh workflow run build-cce-sber-cni.yml --repo dodopizza/infra.k8s.istio-fork \
+     --ref "$CNI_BRANCH" -f publish=true
+   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-fork --exit-status
+   ```
+
+   Используйте ID нового ручного запуска. Возьмите digest из его Summary.
+   В Helm обновите версии компонентов Istio и CNI digest; если Terraform
+   переопределяет образ или версию чарта, обновите их там тоже.
+   Примените через Atlantis и проверьте CNI/ztunnel, same-node и cross-node
+   запросы, Kuberhealthy и waypoint/AuthorizationPolicy.
+   Публикация образа сама по себе кластер не обновляет.
 
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1395/badge)](https://bestpractices.coreinfrastructure.org/projects/1395)
 [![Go Report Card](https://goreportcard.com/badge/github.com/istio/istio)](https://goreportcard.com/report/github.com/istio/istio)
