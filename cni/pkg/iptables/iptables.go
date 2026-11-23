@@ -275,6 +275,13 @@ func (cfg *IptablesConfigurator) AppendInpodRules(podOverrides config.PodLevelOv
 		}
 	}
 
+	// OVS can preserve the sender's socket mark across local pod interfaces.
+	// HBONE transport must not inherit the app-facing TPROXY connmark: it
+	// would route the reply into table 100 (lo). Exempt both directions.
+	iptablesBuilder.AppendRule(ChainInpodPrerouting, "mangle",
+		"-p", "tcp", "-m", "multiport", "--ports", fmt.Sprint(config.ZtunnelInboundPort),
+		"-j", "RETURN")
+
 	// CLI: -A ISTIO_PRERT -m mark --mark 0x539/0xfff -j CONNMARK --set-xmark 0x111/0xfff
 	//
 	// DESC: If we have a packet mark, set a connmark.

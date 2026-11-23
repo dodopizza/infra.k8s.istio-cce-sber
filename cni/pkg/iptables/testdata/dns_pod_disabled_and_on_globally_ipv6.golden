@@ -5,6 +5,7 @@ ip6tables-save
 -N ISTIO_OUTPUT
 -A PREROUTING -j ISTIO_PRERT
 -A OUTPUT -j ISTIO_OUTPUT
+-A ISTIO_PRERT -p tcp -m multiport --ports 15008 -j RETURN
 -A ISTIO_PRERT -m mark --mark 0x539/0xfff -j CONNMARK --set-xmark 0x111/0xfff
 -A ISTIO_OUTPUT -m connmark --mark 0x111/0xfff -j CONNMARK --restore-mark --nfmask 0xffffffff --ctmask 0xffffffff
 COMMIT
@@ -25,6 +26,7 @@ COMMIT
 -N ISTIO_OUTPUT
 -A PREROUTING -j ISTIO_PRERT
 -A OUTPUT -j ISTIO_OUTPUT
+-A ISTIO_PRERT -p tcp -m multiport --ports 15008 -j RETURN
 -A ISTIO_PRERT -m mark --mark 0x539/0xfff -j CONNMARK --set-xmark 0x111/0xfff
 -A ISTIO_OUTPUT -m connmark --mark 0x111/0xfff -j CONNMARK --restore-mark --nfmask 0xffffffff --ctmask 0xffffffff
 COMMIT
