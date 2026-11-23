@@ -2,81 +2,198 @@
 
 ## Переход на новый upstream minor, например 1.30
 
-Используйте полный опубликованный тег (`1.30.0`, `1.30.1` и т. д.).
-Ниже `1.30.0` — пример: команды выполнять после выхода нужного релиза.
-Для каждого upstream tag создаётся отдельная ветка; старая остаётся для отката.
-Команды выполняются из чистого checkout форка. Если remote `upstream` ещё
-не добавлен: `git remote add upstream https://github.com/istio/istio.git`.
+Цель: взять новый официальный Istio, перенести наше исправление для сети Sber,
+собрать CNI и подключить образ через Helm/Terraform. Сам форк собирает только
+CNI; istiod, ztunnel и остальные компоненты обновляются через зависимости чарта.
+`1.30.0` ниже — пример, используйте реально опубликованный полный тег релиза.
 
-1. Создайте ветку от официального тега и перенесите наш патч:
+Понадобятся Git, GitHub CLI (`gh`), Docker с Buildx и Helm.
+Доступ для публикации уже настроен через Actions secret `YCR_CNI_SA_KEY_BASE64`.
+Все команды до шага 6 выполняйте в каталоге этого форка, в одном терминале.
 
-   ```sh
-   UPSTREAM_VERSION=1.30.0
-   CNI_BRANCH="cce-sber-$UPSTREAM_VERSION"
-   git fetch origin
-   git fetch upstream "refs/tags/$UPSTREAM_VERSION:refs/tags/$UPSTREAM_VERSION"
-   git switch -c "$CNI_BRANCH" "$UPSTREAM_VERSION"
+### 1. Получить официальный релиз
 
-   # Только изменение CNI и его golden tests, без старого upstream-кода.
-   git show b09a841ecea29c9baebb2cdf38cd3ce6c60ceaa5 --format= -- cni/pkg/iptables |
-     git apply --3way
+`origin` — наш форк, `upstream` — официальный репозиторий Istio.
+Проверьте `git status --short`: вывод должен быть пустым, иначе сначала
+сохраните текущую работу. Если `upstream` отсутствует в `git remote -v`, добавьте:
 
-   # Перенести файлы сборки и документацию нашего форка.
-   git restore --source origin/cce-sber-1.29.10 -- \
-     .dockerignore .github/workflows/build-cce-sber-cni.yml \
-     cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber \
-     cni/deployments/kubernetes/cce-sber-cni.version README.md DODO_PATCHES.md
-   printf '%s\n' "$UPSTREAM_VERSION-cce-sber-hbone.1" > cni/deployments/kubernetes/cce-sber-cni.version
-   git rev-parse "$UPSTREAM_VERSION^{commit}"
-   ```
+```sh
+git remote add upstream https://github.com/istio/istio.git
+```
 
-   При конфликте остановитесь и адаптируйте патч и golden tests к новому коду.
-   Если upstream уже исправил проблему, проверьте воспроизведение без нашего патча.
+Создайте отдельную ветку от официального тега. Старую ветку оставьте для отката:
 
-2. Обновите перенесённые файлы:
+```sh
+UPSTREAM_VERSION=1.30.0
+CNI_BRANCH="cce-sber-$UPSTREAM_VERSION"
+git fetch origin
+git fetch upstream "refs/tags/$UPSTREAM_VERSION:refs/tags/$UPSTREAM_VERSION"
+git switch -c "$CNI_BRANCH" "$UPSTREAM_VERSION"
+```
 
-   - В workflow замените обе `branches: [cce-sber-1.29.10]` на новую ветку.
-   - В Dockerfile замените runtime на `istio/install-cni:1.30.0-distroless@sha256:…`
-     с digest нового официального образа. Проверьте пути обоих бинарников.
-   - Обновите Go builder и его digest по требованиям нового `go.mod` / `go toolchain`.
-   - Замените `io.dodopizza.istio.upstream-revision` на SHA из `git rev-parse` выше.
-     В README и DODO_PATCHES обновите базовую версию, SHA и имя ветки.
+Если тег не найден, проверьте номер релиза; остальные команды пока не выполняйте.
 
-   Получить digest runtime и посмотреть требования Go:
+### 2. Перенести исправление и файлы сборки
 
-   ```sh
-   docker buildx imagetools inspect "istio/install-cni:$UPSTREAM_VERSION-distroless"
-   rg '^(go|toolchain) ' go.mod
-   ```
+Патч исключает HBONE-соединения из правила, которое ошибочно назначало им
+метку соединения. Команда переносит только этот код и ожидаемые результаты
+тестов (`golden`), без старых исходников Istio:
 
-3. Отправьте ветку и сначала проверьте сборку без публикации:
+```sh
+git show b09a841ecea29c9baebb2cdf38cd3ce6c60ceaa5 --format= -- cni/pkg/iptables |
+  git apply --3way
+```
 
-   ```sh
-   git add cni/pkg/iptables .dockerignore .github/workflows/build-cce-sber-cni.yml \
-     cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber \
-     cni/deployments/kubernetes/cce-sber-cni.version README.md DODO_PATCHES.md
-   git diff --cached --check
-   git commit -m "build(cni): port CCE-Sber workaround to Istio $UPSTREAM_VERSION"
-   git push -u origin "$CNI_BRANCH"
-   gh run list --repo dodopizza/infra.k8s.istio-cce-sber --branch "$CNI_BRANCH" \
-     --workflow build-cce-sber-cni.yml --limit 1
-   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --exit-status
-   ```
+Если появились конфликты, остановитесь: нужно сопоставить новый upstream-код
+с патчем и обновить тесты. Успешное применение патча само по себе не доказывает
+его совместимость. Если upstream уже устранил проблему, сначала проверьте
+воспроизведение без нашего исправления.
 
-4. После успешных тестов опубликуйте образ:
+Скопируйте из предыдущей ветки workflow, Dockerfile и документацию:
 
-   ```sh
-   gh workflow run build-cce-sber-cni.yml --repo dodopizza/infra.k8s.istio-cce-sber \
-     --ref "$CNI_BRANCH" -f publish=true
-   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --exit-status
-   ```
+```sh
+git restore --source origin/cce-sber-1.29.10 -- \
+  .dockerignore .github/workflows/build-cce-sber-cni.yml \
+  cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber \
+  cni/deployments/kubernetes/cce-sber-cni.version README.md DODO_PATCHES.md
+printf '%s\n' "$UPSTREAM_VERSION-cce-sber-hbone.1" > cni/deployments/kubernetes/cce-sber-cni.version
+```
 
-   Используйте ID нового ручного запуска. Возьмите digest из его Summary.
-   В Helm обновите версии компонентов Istio и CNI digest; если Terraform
-   переопределяет образ или версию чарта, обновите их там тоже.
-   Примените через Atlantis и проверьте CNI/ztunnel, same-node и cross-node
-   запросы, Kuberhealthy и waypoint/AuthorizationPolicy.
-   Публикация образа сама по себе кластер не обновляет.
+`1.30.0` — версия официального Istio; `.1` после `hbone` — первая наша сборка
+для этой версии. Повторная публикация требует `.2`, затем `.3` и т. д.
+Существующие теги образов не перезаписываются.
+
+### 3. Настроить сборку для новой версии
+
+Обновите файлы вручную:
+
+| Файл | Что изменить |
+| --- | --- |
+| `.github/workflows/build-cce-sber-cni.yml` | Обе настройки `branches` в `push` и `pull_request`: заменить `cce-sber-1.29.10` на `cce-sber-1.30.0`. |
+| `cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber` | В `ARG RUNTIME_IMAGE` указать `docker.io/istio/install-cni:1.30.0-distroless@sha256:НОВЫЙ_DIGEST`. |
+| Тот же Dockerfile, стадия `source` | Проверить версию Go по новому `go.mod` и требованиям сборки upstream. При необходимости обновить Go-образ и его digest. |
+| Тот же Dockerfile, label `io.dodopizza.istio.upstream-revision` | Указать SHA нового официального тега. |
+| `DODO_PATCHES.md` и эта инструкция | Обновить базовую версию, SHA и имя предыдущей ветки для следующего обновления. |
+
+Digest — неизменяемый идентификатор содержимого образа. Получите его и SHA тега:
+
+```sh
+docker buildx imagetools inspect "istio/install-cni:$UPSTREAM_VERSION-distroless"
+git rev-parse "$UPSTREAM_VERSION^{commit}"
+rg '^(go|toolchain) ' go.mod
+```
+
+В выводе первой команды возьмите верхний `Digest: sha256:…`.
+Для нового Go-образа получите digest такой же командой, подставив выбранный
+`golang:<версия>-bookworm`. Не оставляйте digest от старого тега.
+Проверьте также, что новый официальный CNI-образ по-прежнему использует пути
+`/usr/local/bin/install-cni` и `/opt/cni/bin/istio-cni`, заданные в нашем Dockerfile.
+
+### 4. Проверить сборку в GitHub Actions
+
+```sh
+git add cni/pkg/iptables .dockerignore .github/workflows/build-cce-sber-cni.yml \
+  cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber \
+  cni/deployments/kubernetes/cce-sber-cni.version README.md DODO_PATCHES.md
+git diff --cached --check
+git diff --cached --stat
+git commit -m "build(cni): port CCE-Sber workaround to Istio $UPSTREAM_VERSION"
+git push -u origin "$CNI_BRANCH"
+gh run list --repo dodopizza/infra.k8s.istio-cce-sber --branch "$CNI_BRANCH" \
+  --workflow build-cce-sber-cni.yml --limit 1
+```
+
+Push запускает тесты iptables, сборку `linux/amd64` и проверку запуска обоих
+бинарников. Образ пока не публикуется. Из списка возьмите ID запуска:
+
+```sh
+gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --exit-status
+```
+
+`<RUN_ID>` заменяйте числом, без угловых скобок. Продолжайте после результата
+`success`. При ошибке откройте лог:
+
+```sh
+gh run view <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --log-failed
+```
+
+### 5. Опубликовать образ в Yandex Container Registry
+
+```sh
+gh workflow run build-cce-sber-cni.yml --repo dodopizza/infra.k8s.istio-cce-sber \
+  --ref "$CNI_BRANCH" -f publish=true
+```
+
+Команда выведет ссылку на новый запуск. Возьмите ID из этой ссылки:
+
+```sh
+gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --exit-status
+gh run view <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --web
+```
+
+После `success` в Summary скопируйте всю строку после
+`Pinned reference for Helm values`, например:
+
+```text
+cr.yandex/crpv7tk7maoqsq3usck3/istio/install-cni@sha256:НОВЫЙ_DIGEST
+```
+
+Это ссылка на наш опубликованный образ. Digest официального runtime из шага 3
+здесь не подходит: он относится к образу без нашего исправления.
+
+### 6. Обновить Helm
+
+Перейдите в отдельный checkout [dodopizza/helm](https://github.com/dodopizza/helm).
+Файл с нашим образом добавляется в [PR #980](https://github.com/dodopizza/helm/pull/980);
+пока PR не слит, используйте его ветку `fix/istio-cni-cce-hbone` как основу.
+После слияния создавайте рабочую ветку от актуального `main`.
+
+**Образ меняется здесь:**
+[`charts/istio-control-plane/values-cce-sber.yaml`, поле `cni.image`](https://github.com/dodopizza/helm/blob/fix/istio-cni-cce-hbone/charts/istio-control-plane/values-cce-sber.yaml#L4).
+Замените значение на всю строку из Summary шага 5:
+
+```yaml
+cni:
+  image: cr.yandex/crpv7tk7maoqsq3usck3/istio/install-cni@sha256:НОВЫЙ_DIGEST
+```
+
+В [`charts/istio-control-plane/Chart.yaml`](https://github.com/dodopizza/helm/blob/fix/istio-cni-cce-hbone/charts/istio-control-plane/Chart.yaml)
+обновите:
+
+- `version` — следующая свободная версия нашего Helm-чарта; она не обязана совпадать с версией Istio.
+- `appVersion` — новый upstream tag, например `1.30.0`.
+- Все четыре `dependencies[].version` (`base`, `cni`, `istiod`, `ztunnel`) — тот же upstream tag.
+
+Проверьте чарт из корня Helm-репозитория:
+
+```sh
+helm dependency update charts/istio-control-plane
+helm lint charts/istio-control-plane -f charts/istio-control-plane/values-cce-sber.yaml
+helm template istio-control-plane charts/istio-control-plane \
+  --namespace istio-system -f charts/istio-control-plane/values-cce-sber.yaml \
+  > /tmp/istio-cce-sber-rendered.yaml
+```
+
+Создайте PR с изменениями. Дождитесь успешной публикации новой версии чарта
+в workflow `Release Charts OCI`.
+
+### 7. Обновить Terraform и проверить кластер
+
+В текущей конфигурации m-sber значения заданы **не через подключение отдельного
+values-файла**, а непосредственно в
+[`clouds/sber/services/.kube-warp-maint.libsonnet`](https://github.com/dodopizza/infra-terraform-dubai/blob/feat/m-sber-kube-warp/clouds/sber/services/.kube-warp-maint.libsonnet#L26)
+([PR #6120](https://github.com/dodopizza/infra-terraform-dubai/pull/6120)).
+
+Там нужно отдельно заменить версию чарта в `release(... 'istio-control-plane',
+'istio-control-plane', 'ВЕРСИЯ_ЧАРТА', ...)` и digest в `cni.image`.
+Изменение только Helm-профиля не заменит образ, явно переданный Terraform.
+Сохраните `imagePullSecrets` и `reconcileIptablesOnStartup`.
+
+Подготовьте Terraform PR, проверьте Atlantis plan и выполните apply по принятому
+процессу. После обновления проверьте готовность CNI и ztunnel, запросы между pod
+на одной и на разных нодах, несколько циклов Kuberhealthy и работу
+waypoint/AuthorizationPolicy. Для отката верните предыдущую версию чарта и CNI digest
+и повторите проверки. Публикация образа сама по себе кластер не обновляет.
 
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1395/badge)](https://bestpractices.coreinfrastructure.org/projects/1395)
 [![Go Report Card](https://goreportcard.com/badge/github.com/istio/istio)](https://goreportcard.com/report/github.com/istio/istio)
