@@ -1,0 +1,111 @@
+name: Build CCE-Sber Istio CNI
+
+on:
+  push:
+    branches: [cce-sber-1.29.10]
+    paths:
+      - cni/**
+      - pkg/**
+      - pilot/**
+      - tools/istio-iptables/**
+      - go.mod
+      - go.sum
+      - .dockerignore
+      - .github/workflows/build-cce-sber-cni.yml
+  pull_request:
+    branches: [cce-sber-1.29.10]
+    paths:
+      - cni/**
+      - pkg/**
+      - pilot/**
+      - tools/istio-iptables/**
+      - go.mod
+      - go.sum
+      - .dockerignore
+      - .github/workflows/build-cce-sber-cni.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested image to YCR (requires a fresh version)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cce-sber-cni-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  IMAGE: cr.yandex/crpv7tk7maoqsq3usck3/istio/install-cni
+  DOCKERFILE: cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Read image version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION=$(cat cni/deployments/kubernetes/cce-sber-cni.version)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-cce-sber-hbone\.[0-9]+$ ]]
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "CNI_VERSION=$VERSION" >> "$GITHUB_ENV"
+      - name: Build and run upstream iptables tests
+        run: |
+          docker buildx build --target tests --load -f "$DOCKERFILE" -t cni-tests .
+          docker run --rm --privileged cni-tests -test.v -test.timeout=180s
+      - name: Build amd64 runtime from this checkout
+        run: |
+          docker buildx build --platform linux/amd64 --target runtime --load \
+            --build-arg CNI_VERSION="$CNI_VERSION" \
+            --build-arg SOURCE_REVISION="$GITHUB_SHA" \
+            -f "$DOCKERFILE" -t "istio-cni:$CNI_VERSION" \
+            --metadata-file "$RUNNER_TEMP/image-metadata.json" .
+      - name: Smoke-test both runtime binaries
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/install-cni "istio-cni:$CNI_VERSION" version
+          docker run --rm --env CNI_COMMAND=VERSION --entrypoint /opt/cni/bin/istio-cni "istio-cni:$CNI_VERSION"
+      - name: Export the tested image
+        run: docker save "istio-cni:$CNI_VERSION" | gzip > "$RUNNER_TEMP/istio-cni.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: istio-cni-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/istio-cni.tar.gz
+            ${{ runner.temp }}/image-metadata.json
+          retention-days: 7
+      - name: Login to YCR for manual publication
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          YCR_KEY: ${{ secrets.YCR_CNI_SA_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$YCR_KEY" ]; then
+            echo "::error::Add repository secret YCR_CNI_SA_KEY_BASE64 with registry write access."
+            exit 1
+          fi
+          printf '%s' "$YCR_KEY" | base64 -d | docker login cr.yandex --username json_key --password-stdin
+      - name: Publish the tested image under a new tag
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: |
+          set -euo pipefail
+          REF="$IMAGE:$CNI_VERSION-distroless"
+          if docker manifest inspect "$REF" > /dev/null 2> "$RUNNER_TEMP/manifest-error.txt"; then
+            echo "::error::Tag already exists. Bump cce-sber-cni.version; published tags are immutable."
+            exit 1
+          fi
+          if ! grep -Eq 'no such manifest|manifest unknown|manifest_unknown' "$RUNNER_TEMP/manifest-error.txt"; then
+            cat "$RUNNER_TEMP/manifest-error.txt"
+            exit 1
+          fi
+          docker tag "istio-cni:$CNI_VERSION" "$REF"
+          docker push "$REF"
+          DIGEST=$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}')
+          printf 'Published image: %s\n\nPinned reference for Helm values: %s@%s\n' \
+            "$REF" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

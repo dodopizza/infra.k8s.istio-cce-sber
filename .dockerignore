@@ -1,0 +1,6 @@
+.git
+.env
+.env.*
+out
+_output
+**/__pycache__

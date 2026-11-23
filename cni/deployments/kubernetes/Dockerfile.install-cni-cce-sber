@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+ARG RUNTIME_IMAGE=docker.io/istio/install-cni:1.29.10-distroless@sha256:28a89f753c4f1a94342f6296c0ad60170511fb734fa34a53030657a0c97738bb
+
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.25.9-bookworm@sha256:298734aec230b5f3e8cee450ce6d7eccc39f1797ba548ee90d57e9803030c6c3 AS source
+WORKDIR /src
+# The checked-out fork is the source of truth, including its tests.
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go test -c -o /out/iptables.test ./cni/pkg/iptables
+
+FROM source AS binaries
+ARG TARGETARCH
+ARG CNI_VERSION
+ARG SOURCE_REVISION
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    test -n "$CNI_VERSION" && test -n "$SOURCE_REVISION" && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath \
+      -ldflags="-s -w -X istio.io/istio/pkg/version.buildVersion=${CNI_VERSION} -X istio.io/istio/pkg/version.buildGitRevision=${SOURCE_REVISION} -X istio.io/istio/pkg/version.buildStatus=Modified" \
+      -o /out/install-cni ./cni/cmd/install-cni && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath \
+      -ldflags="-s -w -X istio.io/istio/pkg/version.buildVersion=${CNI_VERSION} -X istio.io/istio/pkg/version.buildGitRevision=${SOURCE_REVISION} -X istio.io/istio/pkg/version.buildStatus=Modified" \
+      -o /out/istio-cni ./cni/cmd/istio-cni
+
+# Use only in an isolated Docker container, never in a host/production netns.
+FROM source AS tests
+RUN apt-get update && apt-get install -y --no-install-recommends iptables iproute2 ipset \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src/cni/pkg/iptables
+ENTRYPOINT ["/out/iptables.test"]
+CMD ["-test.v"]
+
+FROM ${RUNTIME_IMAGE} AS runtime
+ARG CNI_VERSION
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.title="Istio CNI with CCE-Sber HBONE workaround" \
+      org.opencontainers.image.source="https://github.com/dodopizza/infra.k8s.istio-fork" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.version="${CNI_VERSION}" \
+      io.dodopizza.istio.upstream-revision="cca610c61900bd48b5a7b3ee3d8af19ff265c495"
+COPY --from=binaries /out/install-cni /usr/local/bin/install-cni
+COPY --from=binaries /out/istio-cni /opt/cni/bin/istio-cni

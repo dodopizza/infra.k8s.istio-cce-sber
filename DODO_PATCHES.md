@@ -21,10 +21,46 @@
 
 ## Сборка и проверки
 
-Dockerfile и CI сборки находятся в
-[dodopizza/helm, images/istio-cni](https://github.com/dodopizza/helm/tree/fix/istio-cni-cce-hbone/images/istio-cni).
-Dockerfile должен ссылаться на конкретный коммит этого форка и контрольную
-сумму исходного архива. Дополнительный патч во время сборки не применяется.
+Сборка полностью находится в этом форке:
+
+- Dockerfile: `cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber`.
+- Версия образа: `cni/deployments/kubernetes/cce-sber-cni.version`.
+- Workflow: `.github/workflows/build-cce-sber-cni.yml`.
+
+Dockerfile собирает исходники из текущего checkout, без скачивания другой
+копии репозитория или применения отдельного патча. Workflow передаёт SHA
+checkout в BuildInfo обоих бинарников и OCI labels.
+
+Push/PR запускают тесты, сборку amd64 runtime, smoke checks обоих бинарников
+и сохраняют проверенный образ как Actions artifact на 7 дней.
+Ручной запуск с `publish=true` дополнительно публикует тот же проверенный образ
+в `cr.yandex/crpv7tk7maoqsq3usck3/istio/install-cni`.
+Для этого нужен repository secret `YCR_CNI_SA_KEY_BASE64` — JSON-ключ сервисного
+аккаунта Yandex в base64 с правом записи в registry. Значение добавляется через
+GitHub Settings → Secrets and variables → Actions, а не в исходники.
+Существующие теги не перезаписываются; для публикации увеличьте номер ревизии
+в `cce-sber-cni.version`. Следующая ревизия — `.2`, работающий в m-sber образ
+`.1` и его digest этим переносом не меняются.
+
+В Helm остаётся только потребитель: pinned image digest в
+`charts/istio-control-plane/values-cce-sber.yaml`.
+После новой публикации скопируйте digest из workflow summary в профиль чарта.
+
+Локальная проверка из корня форка:
+
+```sh
+docker buildx build --target tests --load \
+  -f cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber -t cni-tests .
+docker run --rm --privileged cni-tests -test.v -test.timeout=180s
+
+docker buildx build --platform linux/amd64 --target runtime --load \
+  --build-arg CNI_VERSION="$(cat cni/deployments/kubernetes/cce-sber-cni.version)" \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  -f cni/deployments/kubernetes/Dockerfile.install-cni-cce-sber -t cni-runtime .
+```
+
+Тестовый контейнер привилегирован для изолированных netns/userns тестов.
+Не запускайте этот тестовый бинарник в production-pod или namespace хоста.
 
 Проверки: весь пакет `cni/pkg/iptables` в изолированном Linux-контейнере,
 включая golden IPv4/IPv6, reconciliation, cleanup и idempotency.
@@ -33,5 +69,5 @@ L7-маршрутизация через временный waypoint и разр
 AuthorizationPolicy. Работа с реальным IPv6-трафиком отдельно не проверена.
 
 При обновлении upstream переносите изменение и ожидаемые результаты тестов
-на новую версию, повторяйте проверки, обновляйте pinned commit/checksum в
-Dockerfile и публикуйте образ под новым тегом. Существующие теги не заменять.
+на новую версию, повторяйте проверки, обновляйте digest базовых образов в
+Dockerfile и публикуйте новую ревизию. Существующие теги не заменять.
