@@ -33,7 +33,7 @@ FROM ${RUNTIME_IMAGE} AS runtime
 ARG CNI_VERSION
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.title="Istio CNI with CCE-Sber HBONE workaround" \
-      org.opencontainers.image.source="https://github.com/dodopizza/infra.k8s.istio-fork" \
+      org.opencontainers.image.source="https://github.com/dodopizza/infra.k8s.istio-cce-sber" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       org.opencontainers.image.version="${CNI_VERSION}" \
       io.dodopizza.istio.upstream-revision="cca610c61900bd48b5a7b3ee3d8af19ff265c495"

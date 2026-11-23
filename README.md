@@ -58,17 +58,17 @@
    git diff --cached --check
    git commit -m "build(cni): port CCE-Sber workaround to Istio $UPSTREAM_VERSION"
    git push -u origin "$CNI_BRANCH"
-   gh run list --repo dodopizza/infra.k8s.istio-fork --branch "$CNI_BRANCH" \
+   gh run list --repo dodopizza/infra.k8s.istio-cce-sber --branch "$CNI_BRANCH" \
      --workflow build-cce-sber-cni.yml --limit 1
-   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-fork --exit-status
+   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --exit-status
    ```
 
 4. После успешных тестов опубликуйте образ:
 
    ```sh
-   gh workflow run build-cce-sber-cni.yml --repo dodopizza/infra.k8s.istio-fork \
+   gh workflow run build-cce-sber-cni.yml --repo dodopizza/infra.k8s.istio-cce-sber \
      --ref "$CNI_BRANCH" -f publish=true
-   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-fork --exit-status
+   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-cce-sber --exit-status
    ```
 
    Используйте ID нового ручного запуска. Возьмите digest из его Summary.
