@@ -179,18 +179,29 @@ helm template istio-control-plane charts/istio-control-plane \
 
 ### 7. Обновить Terraform и проверить кластер
 
-В текущей конфигурации m-sber значения заданы **не через подключение отдельного
-values-файла**, а непосредственно в
-[`clouds/sber/services/.kube-warp-maint.libsonnet`](https://github.com/dodopizza/infra-terraform-dubai/blob/feat/m-sber-kube-warp/clouds/sber/services/.kube-warp-maint.libsonnet#L26)
-([PR #6120](https://github.com/dodopizza/infra-terraform-dubai/pull/6120)).
+Для каждого обновляемого кластера Sber найдите в Terraform-репозитории
+описание Helm-релиза `istio-control-plane` и проверьте, откуда он получает values.
+Это относится к m-sber, d-sber и другим кластерам Sber с установленным Istio.
+Найти релизы и явно заданные образы можно из корня Terraform-репозитория:
 
-Там нужно отдельно заменить версию чарта в `release(... 'istio-control-plane',
-'istio-control-plane', 'ВЕРСИЯ_ЧАРТА', ...)` и digest в `cni.image`.
-Изменение только Helm-профиля не заменит образ, явно переданный Terraform.
-Сохраните `imagePullSecrets` и `reconcileIptablesOnStartup`.
+```sh
+rg -n 'istio-control-plane|install-cni|values-cce-sber' clouds/sber environments
+```
+
+В описании релиза замените версию чарта. Если `cni.image` задан прямо в Jsonnet,
+обновите digest и там: изменение только Helm-профиля не заменит образ,
+явно переданный Terraform. Если релиз загружает отдельный values-файл,
+проверьте, что он получает обновлённый профиль и не переопределяет образ ниже.
+Сохраните настройки `imagePullSecrets` и `reconcileIptablesOnStartup`.
+
+Пример явной передачи values —
+[`clouds/sber/services/.kube-warp-maint.libsonnet`](https://github.com/dodopizza/infra-terraform-dubai/blob/feat/m-sber-kube-warp/clouds/sber/services/.kube-warp-maint.libsonnet#L26)
+для m-sber ([PR #6120](https://github.com/dodopizza/infra-terraform-dubai/pull/6120)).
+Для остальных кластеров найдите соответствующее описание релиза.
 
 Подготовьте Terraform PR, проверьте Atlantis plan и выполните apply по принятому
-процессу. После обновления проверьте готовность CNI и ztunnel, запросы между pod
+процессу для выбранных кластеров. В каждом обновлённом кластере проверьте
+готовность CNI и ztunnel, запросы между pod
 на одной и на разных нодах, несколько циклов Kuberhealthy и работу
 waypoint/AuthorizationPolicy. Для отката верните предыдущую версию чарта и CNI digest
 и повторите проверки. Публикация образа сама по себе кластер не обновляет.

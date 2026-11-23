@@ -45,9 +45,10 @@ GitHub Settings → Secrets and variables → Actions, а не в исходни
 В Helm остаётся только потребитель: pinned image digest в
 `charts/istio-control-plane/values-cce-sber.yaml`.
 После новой публикации скопируйте digest из workflow summary в профиль чарта.
-В m-sber Terraform также явно задаёт `cni.image` в
-`clouds/sber/services/.kube-warp-maint.libsonnet`: обновите digest и версию
-чарта там. Отдельный файл `values-cce-sber.yaml` автоматически не подключается.
+В каждом обновляемом кластере Sber проверьте Terraform-описание релиза:
+обновите версию чарта и явно заданный `cni.image`, если он есть.
+Например, m-sber задаёт их в `clouds/sber/services/.kube-warp-maint.libsonnet`.
+Отдельный файл `values-cce-sber.yaml` автоматически не подключается.
 
 Локальная проверка из корня форка:
 
