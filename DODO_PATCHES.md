@@ -39,8 +39,8 @@ Push/PR запускают тесты, сборку amd64 runtime, smoke checks 
 аккаунта Yandex в base64 с правом записи в registry. Значение добавляется через
 GitHub Settings → Secrets and variables → Actions, а не в исходники.
 Существующие теги не перезаписываются; для публикации увеличьте номер ревизии
-в `cce-sber-cni.version`. Следующая ревизия — `.2`, работающий в m-sber образ
-`.1` и его digest этим переносом не меняются.
+в `cce-sber-cni.version`. Ревизия `.2` опубликована из этого форка;
+пошаговые команды обновления находятся в [README](README.md#обновление-образа-cni-для-cce-sber).
 
 В Helm остаётся только потребитель: pinned image digest в
 `charts/istio-control-plane/values-cce-sber.yaml`.

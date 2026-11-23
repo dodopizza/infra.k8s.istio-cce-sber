@@ -1,5 +1,51 @@
 # Istio
 
+## Обновление образа CNI для CCE-Sber
+
+Версия задаётся в `cni/deployments/kubernetes/cce-sber-cni.version`.
+Для новой сборки увеличьте ревизию: например, `.2` → `.3`.
+Опубликованные теги не перезаписываются. Нужны `gh`, доступ к репозиторию
+и настроенный Actions secret `YCR_CNI_SA_KEY_BASE64`.
+
+1. После внесения изменений в код обновите версию и отправьте коммит:
+
+   ```sh
+   git switch cce-sber-1.29.10
+   git pull --ff-only
+   printf '%s\n' '1.29.10-cce-sber-hbone.3' > cni/deployments/kubernetes/cce-sber-cni.version
+   git add cni/deployments/kubernetes/cce-sber-cni.version
+   git commit -m 'build(cni): bump CCE-Sber image to hbone.3'
+   git push origin cce-sber-1.29.10
+   ```
+
+   Изменения кода должны быть закоммичены и отправлены вместе с версией или раньше.
+
+2. Запустите тесты, сборку и публикацию в YCR:
+
+   ```sh
+   gh workflow run build-cce-sber-cni.yml \
+     --repo dodopizza/infra.k8s.istio-fork \
+     --ref cce-sber-1.29.10 -f publish=true
+   ```
+
+   Команда выведет ссылку на запуск. Подставьте ID из этой ссылки:
+
+   ```sh
+   gh run watch <RUN_ID> --repo dodopizza/infra.k8s.istio-fork --exit-status
+   gh run view <RUN_ID> --repo dodopizza/infra.k8s.istio-fork --web
+   ```
+
+3. В Summary успешного запуска скопируйте `Pinned reference for Helm values`:
+   `cr.yandex/crpv7tk7maoqsq3usck3/istio/install-cni@sha256:...`.
+   Обновите `cni.image` в Helm-репозитории, файл
+   `charts/istio-control-plane/values-cce-sber.yaml`, и увеличьте версию чарта
+   в его `Chart.yaml`. Если Terraform передаёт `cni.image` явно, обновите
+   digest и там. Выпустите чарт и примените изменение через Atlantis.
+
+Push/PR выполняют проверки без публикации. Для обновления самой версии Istio
+нужно также перенести патч на новый upstream tag и обновить базовые образы
+в Dockerfile — [подробнее о патче и сборке](DODO_PATCHES.md).
+
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/1395/badge)](https://bestpractices.coreinfrastructure.org/projects/1395)
 [![Go Report Card](https://goreportcard.com/badge/github.com/istio/istio)](https://goreportcard.com/report/github.com/istio/istio)
 [![GoDoc](https://godoc.org/istio.io/istio?status.svg)](https://godoc.org/istio.io/istio)
